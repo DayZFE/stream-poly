@@ -1,109 +1,211 @@
+import { BehaviorSubject, Subject } from "rxjs";
+import { takeUntil } from "rxjs/operators";
 import { v4 as uuid } from "uuid";
-import { BehaviorSubject, Subscription } from "rxjs";
-import { getCurrentInstance, inject, onUnmounted, provide } from "vue";
+import {
+  getCurrentInstance,
+  inject,
+  onBeforeMount,
+  onBeforeUnmount,
+  onBeforeUpdate,
+  onErrorCaptured,
+  onMounted,
+  onRenderTracked,
+  onRenderTriggered,
+  onUnmounted,
+  onUpdated,
+  provide,
+} from "vue";
 
 /**
- * poly root to analysis
+ * get provider's type support
  *
  * @export
- * @class PolyRoot
+ * @template T
+ * @param {((new (...args: any[]) => T) | ((...args: any[]) => T))} poly
+ * @returns
  */
-export class PolyRoot {
-  children__: any[] = [];
+export function cataly<T>(
+  poly: (new (...args: any[]) => T) | ((...args: any[]) => T)
+) {
+  return (undefined as unknown) as T | undefined;
+}
+
+/**
+ * defined provider
+ *
+ * @export
+ * @param {string} injectionKey
+ * @returns
+ */
+export function provider(injectionKey: string) {
+  return function (target: any, key: string, des: any) {
+    let instance: any = undefined;
+    if (target.providerKeys__ === undefined) {
+      target.providerKeys__ = [];
+    }
+    target.providerKeys__.push(key);
+    des.get = function () {
+      if (target.inited__) return instance;
+      if (instance === undefined) {
+        instance = inject(injectionKey, undefined);
+      }
+      return instance;
+    };
+  };
+}
+
+export class Lifecycle {
+  beforeMount$ = new Subject();
+  mounted$ = new Subject();
+  beforeUpdate$ = new Subject();
+  updated$ = new Subject();
+  beforeUnmount$ = new Subject();
+  unmounted$ = new Subject();
+  errorCaptured$ = new Subject();
+  renderTracked$ = new Subject();
+  renderTriggered$ = new Subject();
+  over$ = this.unmounted$;
+  render$ = new Subject();
   constructor() {
-    provide("ploy-node", this);
+    onBeforeMount(() => {
+      this.beforeMount$.next();
+    });
+    onMounted(() => {
+      this.mounted$.next();
+    });
+    onBeforeUpdate(() => {
+      this.beforeUpdate$.next();
+    });
+    onUpdated(() => {
+      this.updated$.next();
+    });
+    onBeforeUnmount(() => {
+      this.beforeUnmount$.next();
+    });
+    onUnmounted(() => {
+      this.unmounted$.next();
+    });
+    onErrorCaptured((err) => {
+      this.errorCaptured$.next(err);
+    });
+    onRenderTracked(() => {
+      this.renderTracked$.next();
+    });
+    onRenderTriggered(() => {
+      this.renderTriggered$.next();
+    });
   }
 }
 
 /**
- * poly meta config
+ * define a poly
  *
  * @export
- * @interface PolyMeta
- */
-export interface PolyMeta {
-  print?: boolean;
-  reactives?: string[];
-  deps?: { key: string; value: string };
-}
-
-/**
- * poly descriptor
- *
- * @export
- * @template T
- * @param {PolyMeta} [meta]
+ * @param {*} target
  * @returns
  */
-export function poly<T extends new (...args: any[]) => any>(meta?: PolyMeta) {
-  return function (target: T) {
-    return class extends target {
-      tokenId = uuid();
-      logicId = target.name;
-      // child injection
-      children__: any[] = [];
-      private reactives = meta?.reactives || [];
-      private print = meta?.print || false;
-      private deps: { key: string; value: string }[] =
-        meta?.deps || ([] as any);
-
-      private subscribers: { key: string; value: BehaviorSubject<any> }[] = [];
-      private subscriptions: { key: string; value: Subscription }[] = [];
-      constructor(...args: any[]) {
-        super(...args);
-        // handle injections
-        for (let item of this.deps) {
-          this[item.key] = inject(item.value, undefined);
-          if (this.print && this[item.key] === undefined) {
-            console.warn(`[poly] lose link to dep - ${item.key}`);
+export function poly(target: any) {
+  return class extends target {
+    constructor(...params: any[]) {
+      super(...params);
+      // initialize provider
+      if (target.prototype.providerKeys__) {
+        target.prototype.providerKeys__.forEach((key: string) => {
+          this[key];
+        });
+      }
+      if (this.render$) {
+        let instance = getCurrentInstance();
+        const subscription = this.render$.subscribe(() => {
+          if (!instance) {
+            instance = getCurrentInstance();
           }
-        }
-        // handle subscribers
-        for (let key of this.reactives) {
-          if (
-            key[key.length - 1] === "$" &&
-            this[key] instanceof BehaviorSubject
-          ) {
-            this.subscribers.push({ key, value: this[key] });
-          } else if (this.print) {
-            console.warn(
-              `[poly] only BehaviorSubject will react to view, wrong key - ${key}`
-            );
-          }
-        }
-        for (let item of this.subscribers) {
-          const instance = getCurrentInstance();
-          const subscription = item.value.subscribe((res) => {
-            // force update for behavior subject's subscription
-            if (instance && instance.proxy && instance.proxy.$forceUpdate) {
-              instance.proxy.$forceUpdate();
-            }
-            if (this.print) {
-              console.log(
-                `[poly]${this.logicId}[${this.tokenId}] subscription: ${item.key}:`
-              );
-              console.dir(res);
-            }
-          });
-          this.subscriptions.push({ key: item.key, value: subscription });
-        }
-        // handle unsubscribe
-        onUnmounted(() => {
-          for (let subscription of this.subscriptions) {
-            subscription.value.unsubscribe();
+          if (instance && instance.proxy && instance.proxy.$forceUpdate) {
+            instance.proxy.$forceUpdate();
           }
         });
-        // handle analysis support
-        const beforeNode: any = inject("poly-node", undefined);
-        if (beforeNode !== undefined && beforeNode.children__) {
-          beforeNode.children__.push(this);
-        }
-        // handle provide
-        provide(this.tokenId, this);
-        provide(this.logicId, this);
-        // provide a poly node to analysis
-        provide("poly-node", this);
+        onUnmounted(() => {
+          subscription.unsubscribe();
+        });
       }
-    };
-  };
+      // for debug, generate providers tree
+      this.children__ = [] as any[];
+      const beforePoly: any = inject("poly-node", undefined);
+      if (beforePoly) {
+        beforePoly.children__.push(this);
+      }
+      // provide all
+      this.id = this.id || uuid();
+      provide(this.id, this);
+      provide(target.name, this);
+      provide("poly-node", this);
+      target.prototype.inited__ = true;
+    }
+  } as any;
+}
+
+class Another {
+  name = "sfsfs";
+}
+
+// exmaple with rx
+@poly
+class PolyTest1 {
+  test$ = new BehaviorSubject("test");
+  constructor() {
+    this.test$.next("new test");
+  }
+}
+
+// reactive to template vm
+@poly
+class PolyTest2 extends Lifecycle {
+  test$ = new BehaviorSubject("test");
+  constructor() {
+    super();
+    this.test$.next("new test");
+    // subscribe some stream to render$ subject
+    this.test$.pipe(takeUntil(this.over$)).subscribe(this.render$);
+  }
+}
+
+// example with provider
+@poly
+class PolyTest3 {
+  @provider(Another.name)
+  get another() {
+    return cataly(Another);
+  }
+  @provider(Another.name)
+  get anotherCopy() {
+    return cataly(Another);
+  }
+  constructor() {
+    console.log(this.another);
+  }
+}
+
+// example with provider and lifecycle
+@poly
+class PolyTest4 extends Lifecycle {
+  @provider(Another.name)
+  get another() {
+    return cataly(Another);
+  }
+  @provider(Another.name)
+  get anotherCopy() {
+    return cataly(Another);
+  }
+  test$ = new BehaviorSubject("test");
+  constructor() {
+    super();
+    this.mounted$.pipe(takeUntil(this.unmounted$)).subscribe(() => {
+      console.log("mounted");
+      this.test$.next("new test");
+    });
+    setTimeout(() => {
+      this.test$.next("timeout mounted");
+    }, 2000);
+    this.test$.pipe(takeUntil(this.over$)).subscribe(this.render$);
+  }
 }
