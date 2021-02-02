@@ -3,16 +3,15 @@ import { BehaviorSubject, from, merge } from "rxjs";
 import { tap, switchMap, map, takeUntil } from "rxjs/operators";
 import Schema, { FieldErrorList } from "async-validator";
 
-export type FormDataProto = { [key: string]: any } | any[];
 export interface ValidationResult {
   valid: boolean;
   errorFields: FieldErrorList;
-  value: FormDataProto;
+  value: any;
 }
 
 @poly
 export default class Form<
-  F extends BehaviorSubject<FormDataProto>,
+  F extends BehaviorSubject<any>,
   R extends { [key: string]: any }
 > extends Lifecycle {
   model$: F;
